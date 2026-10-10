@@ -1,0 +1,31 @@
+# Everything derived from the game stays out of the repository.
+/cd_root/
+/build/
+/work/
+*.cdi
+*.iso
+*.gdi
+*.cue
+*.bin
+*.BIN
+*.img
+*.SCO
+*.sco
+*.B1
+*.CMP
+*.CPK
+*.SEQ
+*.adx
+*.mpg
+*.wav
+*.WAV
+*.mid
+*.bmp
+*.png
+
+# Build products
+*.o
+*.elf
+romdisk.img
+__pycache__/
+*.pyc
