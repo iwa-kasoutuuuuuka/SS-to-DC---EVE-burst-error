@@ -83,7 +83,11 @@ class Game:
     def __init__(self, images):
         self.discs = {}
         for image in images:
-            disc = satdisc.SaturnDisc(image)
+            try:
+                disc = satdisc.SaturnDisc(image)
+            except (OSError, ValueError) as e:
+                log(f"skipping {image}: {e}")
+                continue
             number = None
             for name, _, _ in disc.listdir(""):
                 m = re.fullmatch(r"DISC(\d)", name.upper())

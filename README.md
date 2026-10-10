@@ -30,32 +30,105 @@ version of *EVE burst error* on the Dreamcast. ([English](#english) below.)
 | CD イメージ作成 | `mkisofs` と `cdi4dc`（DreamSDK に同梱） |
 | 実行 | [Flycast](https://github.com/flyinghead/flycast) などのエミュレータ、または CD-R と実機 |
 
-## 手順
+## 使い方
+
+全体の流れは「ディスクを吸い出す → 変換する → ビルドする → 起動する」の 4 段階です。
+以下のコマンドは、このリポジトリを取得したフォルダの直下で実行します。
+
+### 0. 準備
+
+1. **ディスクイメージを用意する。** 手持ちのサターン版ゲームディスク 3 枚（小次郎ディスク、まりなディスク、
+   3 枚目のディスク）を、お使いの吸い出しソフトで `.cue` ＋ `.bin` 形式にします。
+   メイキングディスク（4 枚目）は使いません。渡しても無視されます。
+2. **Python と numpy を入れる。** Python 3.8 以降を入れたうえで、次を実行します。
+
+   ```bash
+   python -m pip install numpy
+   ```
+
+3. **ffmpeg を入れる。** `ffmpeg -version` が動けば準備完了です（PATH を通してください）。
+4. **KallistiOS を入れる。** Windows では DreamSDK を入れるのが簡単です。`libmpeg`（kos-ports）も必要です。
+
+### 1. 変換する
+
+ディスクイメージ 3 枚を渡します。順番は自由で、どれが何枚目かはイメージの中身から自動で判定します。
+`.cue` の代わりに、データトラックの `.bin`（「Track 1」のファイル）や `.iso` を直接渡しても構いません。
 
 ```bash
-python -m pip install numpy
+python tools/convert.py "Disc 1.cue" "Disc 2.cue" "Disc 3.cue"
 ```
 
-1. ディスク 3 枚を変換します（順番は自由。ディスク番号はイメージから判定します）。
+実行すると、ディスクごとに次のような進行状況が出ます。
 
-   ```bash
-   python tools/convert.py "Disc 1.cue" "Disc 2.cue" "Disc 3.cue"
-   ```
+```
+disc 1: ... (Disc 1) (Track 1).bin
+== Disc 1 -> cd_root\Disc1
+  scenario: 90 files
+  graphics: 228 pictures for 29 scripts
+  movies: 17
+  voices: 4952
+  bgm: 46 songs
+  total 262.8 MiB
+```
 
-   `cd_root/Disc1`〜`Disc3` に Dreamcast 用のファイル一式ができます。音声が約 2 万本あるため、
-   初回は数十分かかります。途中で止めても、再実行すれば続きから再開します。
+- 出力先は `cd_root/Disc1`、`Disc2`、`Disc3` です。合計で約 1.1GB になります。
+- 音声が約 2 万本あるため、初回は 20〜40 分ほどかかります（CPU のコア数によります）。
+- 途中で止めても、もう一度同じコマンドを実行すれば続きから再開します。
+- 最後に `not converted` と出た場合は、その行に変換できなかったファイル名が並びます。
+  3 枚すべてを渡していないと、別のディスクにある画像やムービーが不足します。
 
-2. KallistiOS の環境（DreamSDK Shell など）でビルドします。
+主なオプション:
 
-   ```bash
-   make cdi DISC=1
-   ```
+| オプション | 意味 |
+|---|---|
+| `--out フォルダ` | 出力先を変える（既定は `cd_root`。変えた場合は `make cdi CDROOT=フォルダ/Disc1` のように指定） |
+| `--only-disc 2` | そのディスクの分だけ作る（イメージは 3 枚とも渡すのがおすすめ） |
+| `--skip voices,bgm` | 指定した工程を飛ばす（`scenario`、`graphics`、`movies`、`voices`、`bgm`） |
+| `--jobs 4` | 並列数を指定する（既定は CPU のコア数） |
+| `--force` | すでにあるファイルも作り直す |
 
-   `build/eve_dc_disc1.cdi` ができます。`DISC=2`、`DISC=3` も同様です。
-   デバッグ出力の無い版は `make release DISC=1` です。
+### 2. ビルドする
 
-3. `build/eve_dc_disc1.cdi` をエミュレータで開くか、CD-R に焼いて実機で起動します。
-   ゲームはディスク 1 から始まり、物語の進行に応じてディスク交換を求められます。
+KallistiOS の環境が有効なシェル（DreamSDK なら「DreamSDK Shell」）で、ディスクごとに実行します。
+
+```bash
+make cdi DISC=1
+```
+
+```bash
+make cdi DISC=2
+```
+
+```bash
+make cdi DISC=3
+```
+
+`build/eve_dc_disc1.cdi`、`eve_dc_disc2.cdi`、`eve_dc_disc3.cdi` ができます。
+エンジンはディスク番号ごとにコンパイルし直すので、3 枚とも `make cdi` が必要です。
+
+- デバッグ出力（シリアルログ）の無い版は `make release DISC=1` で作ります。実機で遊ぶ場合はこちらを使ってください。
+- 起動時のロゴとオープニングを省くには `make cdi DISC=1 EXTRA_CFLAGS="-DNO_INTRO"` とします。
+- 最初からやり直すときは `make clean` を実行します（`cd_root` は消えません）。
+
+### 3. 起動する
+
+- **エミュレータ**: Flycast などで `build/eve_dc_disc1.cdi` を開きます。
+- **実機**: CDI 形式に対応した書き込みソフトで CD-R に焼きます。3 枚とも 80 分 CD-R に収まります。
+- ゲームは必ずディスク 1 から始めます。物語が進むと「ディスク n に交換してください」と表示されるので、
+  該当する CDI（または CD-R）に入れ替えると続きが始まります。
+- セーブにはビジュアルメモリ（VMU）が必要です。エミュレータでは VMU を有効にしておいてください。
+
+### うまくいかないとき
+
+| 症状 | 対処 |
+|---|---|
+| `numpy is required` | `python -m pip install numpy` を実行する |
+| `ffmpeg was not found on PATH` | ffmpeg を入れて PATH を通す |
+| `skipping ...: not a game disc` | ゲームディスク以外（メイキングディスクや音声トラック）を渡している。データトラックのイメージを指定する |
+| `no ISO9660 volume descriptor` | `.cue` か「Track 1」の `.bin` を指定する（「Track 2」は音声トラック） |
+| `cd_root/Disc1 not found` | 先に `tools/convert.py` を実行する |
+| `kos-cc` が見つからない、`makeip` がエラーで止まる | DreamSDK Shell など、KallistiOS の環境が有効なシェルで `make` を実行する |
+| 音声や BGM が鳴らない | 変換のログに `not converted` が無いか確認し、`--force` を付けずに再実行して不足分を作る |
 
 ### 操作
 
@@ -135,10 +208,26 @@ python tools/convert.py "Disc 1.cue" "Disc 2.cue" "Disc 3.cue"
 make cdi DISC=1
 ```
 
-`convert.py` writes `cd_root/Disc1..3` (it takes a while: there are about 20,000
-voice clips; an interrupted run resumes where it stopped). `make cdi DISC=n`
-produces `build/eve_dc_disc<n>.cdi`. Boot disc 1; the game asks for the other
-discs as the story goes on, exactly like the Saturn release.
+1. **Convert.** Pass the three game discs in any order (a `.cue`, the "Track 1"
+   `.bin`, or an `.iso`; the bonus fourth disc is ignored). `convert.py` writes
+   `cd_root/Disc1..3`, about 1.1 GB in total. The first run takes 20 to 40 minutes
+   because there are about 20,000 voice clips; an interrupted run resumes where
+   it stopped. Items listed after `not converted` could not be made, usually
+   because one of the three discs was not given.
+   Options: `--out DIR`, `--only-disc N`, `--skip voices,bgm,...`, `--jobs N`, `--force`.
+2. **Build.** In a shell with the KallistiOS environment (the DreamSDK Shell on
+   Windows) run `make cdi DISC=1`, then `DISC=2` and `DISC=3`: the engine is
+   compiled per disc. This gives `build/eve_dc_disc<n>.cdi`. Use
+   `make release DISC=n` for images without the serial debug log, and
+   `EXTRA_CFLAGS="-DNO_INTRO"` to skip the logo and opening movies.
+3. **Run.** Open `build/eve_dc_disc1.cdi` in an emulator such as Flycast, or burn
+   the images to 80-minute CD-Rs. Always start with disc 1; the game asks for
+   the other discs as the story goes on, exactly like the Saturn release.
+   Saving needs a VMU.
+
+If `make` cannot find `kos-cc` or `makeip` stops with an error, you are not in
+the KallistiOS shell. If `convert.py` says an image is "not a game disc" or has
+"no ISO9660 volume descriptor", pass the data track ("Track 1") or the `.cue`.
 
 Controls: A advance / confirm, B cancel (hold to fast-forward), D-pad cursor,
 Start system menu (save, load, switch character, auto, skip read text, title),
