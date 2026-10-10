@@ -163,6 +163,28 @@ docs/formats.md          解析したファイル形式の説明
 - タイトル画面やセーブ画面の見た目は原作と異なります。
 - 実機での動作確認は十分ではありません。
 
+## 参考資料
+
+このリポジトリ内の文書:
+
+- [docs/formats.md](docs/formats.md) — 解析したファイル形式（シナリオ、画像、圧縮、音声、BGM）
+- [docs/reference/dreamcast-homebrew-knowledge.md](docs/reference/dreamcast-homebrew-knowledge.md) — Dreamcast ホームブリュー開発の知見まとめ
+- [docs/reference/porting-article.md](docs/reference/porting-article.md) — 移植で踏んだ落とし穴をまとめた記事原稿
+- [docs/reference/dc-development-guide.md](docs/reference/dc-development-guide.md) — CDI 作成手順と失敗時のチェックリスト
+- [docs/reference/roadmap.md](docs/reference/roadmap.md) — 完成までのロードマップと進捗
+
+`docs/reference/` は開発中の作業ツリーで書いた記録で、パスや一部の記述は公開版と異なります
+（[注意書き](docs/reference/README.md)を参照）。
+
+外部の資料:
+
+- [KallistiOS](https://github.com/KallistiOS/KallistiOS) と [kos-ports](https://github.com/KallistiOS/kos-ports)（libADX、libmpeg）
+- [DreamSDK](https://dreamsdk.org/)
+- [Flycast](https://github.com/flyinghead/flycast)
+- セガサターンのサウンドドライバ／トーンエディタのマニュアル（シーケンスと音色バンクの形式）
+- [VGMTrans](https://github.com/vgmtrans/vgmtrans)（サターンのシーケンスイベントの仕様確認）
+- SCSP ユーザーズマニュアル（エンベロープと LFO のレート表）
+
 ## ライセンスと権利について
 
 - 本リポジトリのソースコードとドキュメントは [MIT License](LICENSE) です。
@@ -244,6 +266,13 @@ Known limits: the music is rendered by a software synthesiser from the Saturn
 sequence data and does not match the console exactly (no FM voices, DSP reverb
 or pitch envelopes); some screen effects are approximations; the title and save
 screens look different; testing on real hardware is limited.
+
+### References
+
+File formats: [docs/formats.md](docs/formats.md). Development notes (Japanese):
+[docs/reference/](docs/reference/README.md). External: KallistiOS and kos-ports,
+DreamSDK, Flycast, Sega's Saturn sound driver manuals, VGMTrans, the SCSP
+user's manual (see [THIRD_PARTY.md](THIRD_PARTY.md)).
 
 ### License
 
