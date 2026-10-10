@@ -193,7 +193,20 @@ void vm_on_bgm(int opcode, int value) {
     printf("BGM: op %02x value %d\n", opcode, value);
 #endif
     if (opcode == OP_POSTWAIT) {
-        if (value > 0) bgm_play(value); else bgm_stop();
+        static int jingle = 0;
+        if (value <= 0) {
+            bgm_stop();
+        } else if (value == jingle && audio_voice_playing()) {
+            /* the script repeats the instruction while the jingle is still on */
+        } else if (bgm_play(value)) {
+            jingle = 0;
+        } else {
+            /* No sequence with this number (52): the Saturn disc has it as a
+             * recorded clip SOUND/EVE_<n>.WAV, played once like a sound effect. */
+            char token[16];
+            snprintf(token, sizeof(token), "eve_%d", value);
+            if (audio_play_voice(token)) jingle = value;
+        }
     } else if (opcode == OP_BGM_B) {
         bgm_fade_out(value * 15);
     } else if (opcode == OP_BGM_A) {
@@ -960,6 +973,9 @@ int main(int argc, char **argv) {
 #ifndef NDEBUG
         printf("Start block %d at ip %lu\n", START_BLOCK, (unsigned long)vm_ctx.ip);
 #endif
+#endif
+#ifdef START_IP
+        vm_ctx.ip = START_IP;       /* test entry: byte ip as printed by tools/sco.py */
 #endif
         update_text_texture((const uint8_t *)"SCENARIO LOADED: " EVE_STR(START_SCRIPT_NAME) ".SCO");
     }

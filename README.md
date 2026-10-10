@@ -162,10 +162,6 @@ docs/formats.md          解析したファイル形式の説明
 - パレットアニメーションなど一部の画面効果は近似です。
 - タイトル画面やセーブ画面の見た目は原作と異なります。
 - 実機での動作確認は十分ではありません。
-- 小次郎編 A001_2 の 1 場面（「？？？？？！！！！！」）で鳴るはずの BGM 52 は無音です。
-  シナリオ命令 `8026 52` に対応する曲がサターン版の曲バンク（GAMEA〜D / JOIN / DIARY、1〜47 番）に存在せず、
-  Windows 版ではこの命令だけ効果音 `eve_52.ldp`（未解読の独自圧縮）に置き換えられているためです。
-  影響は 1 回の短いジングルのみです。
 
 ## 参考資料
 
@@ -270,10 +266,6 @@ Known limits: the music is rendered by a software synthesiser from the Saturn
 sequence data and does not match the console exactly (no FM voices, DSP reverb
 or pitch envelopes); some screen effects are approximations; the title and save
 screens look different; testing on real hardware is limited.
-BGM 52, cued once in the Kojiro route (A001_2, the "?????!!!!!" sting), stays
-silent: the Saturn song banks (GAMEA-D / JOIN / DIARY, songs 1-47) have no song
-52, and the Windows version replaces that one instruction with the sound
-effect eve_52.ldp, whose codec is not decoded. Only that short jingle is lost.
 
 ### References
 
