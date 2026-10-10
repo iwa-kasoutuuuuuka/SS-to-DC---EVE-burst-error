@@ -310,7 +310,8 @@ static void upper_name(const char *src, char *dst, int cap) {
  * path_out receives the path that was actually opened (for logging). */
 static uint8_t *load_scenario_by_name(const char *name_upper, uint32_t *size_out,
                                       char *path_out, size_t cap) {
-    snprintf(path_out, cap, SCENARIO_DIR "/%s.SCO", name_upper);
+    /* Each disc carries its own scenario/Disc<n>: follow the disc in the drive. */
+    snprintf(path_out, cap, "/cd/scenario/Disc%d/%s.SCO", cur_disc, name_upper);
     uint8_t *data = asset_load_scenario(path_out, size_out);
     if (!data) {
         snprintf(path_out, cap, "/rd/%s.SCO", name_upper);
@@ -381,6 +382,7 @@ static void collect_save(save_data_t *d) {
     memcpy(d->bg_name, vm_ctx.bg_name, VM_NAME_LEN);
     memcpy(d->other_bg, other_ctx.bg_name, VM_NAME_LEN);
     d->bgm = (uint16_t)bgm_current();
+    d->disc = (uint16_t)cur_disc;
     memcpy(d->vars, vm_ctx.vars, sizeof(d->vars));
 }
 
@@ -463,6 +465,12 @@ static void sys_message(const char *msg) {
     sys_menu = SYS_MSG;
 }
 
+#ifdef MULTI_DISC
+static void request_disc(int n);         /* defined below */
+static save_data_t pending_load;         /* save waiting for its disc */
+static int  has_pending_load = 0;
+#endif
+
 static void handle_slot_choice(void) {
     int kind = sys_menu, slot = vm_ctx.select_idx;
     if (slot >= SAVE_SLOTS) {                             /* キャンセル */
@@ -485,6 +493,18 @@ static void handle_slot_choice(void) {
     } else {
         static save_data_t d;
         int rc = save_read(slot, &d);
+#ifdef MULTI_DISC
+        if (rc == SAVE_OK && d.disc >= 1 && d.disc <= 3 && d.disc != cur_disc) {
+            /* The save was made on another disc: its pictures and voices are
+             * not on this one. Ask for that disc first, then load. */
+            memcpy(&pending_load, &d, sizeof(d));
+            has_pending_load = 1;
+            sys_menu = 0;
+            vm_ctx.is_choosing = 0;
+            request_disc(d.disc);
+            return;
+        }
+#endif
         if (rc == SAVE_OK && apply_save(&d)) {
             sys_has_backup = 0;                           /* the old state is gone */
             msg = SJ_LOADED;
@@ -864,6 +884,19 @@ int main(int argc, char **argv) {
         printf("CD-ROM check timed out!\n");
     }
 #endif
+#ifdef MULTI_DISC
+    /* The program on every disc is the same apart from EVE_DISC; trust the
+     * marker of the disc that is actually in the drive. */
+    if (!disc_present(cur_disc)) {
+        for (int n = 1; n <= 3; n++) {
+            if (disc_present(n)) {
+                cur_disc = n;
+                audio_init(cur_disc);
+                break;
+            }
+        }
+    }
+#endif
 
 #if !defined(NO_INTRO) && !defined(NO_VIDEO) && !DEMO_AUTO_ADVANCE && !defined(START_SCRIPT_NAME_GIVEN)
     /* Boot sequence: C's ware logo, then the opening movie.
@@ -1110,7 +1143,17 @@ int main(int argc, char **argv) {
                     audio_init(cur_disc);
                     printf("DISC: disc %d detected\n", cur_disc);
                     game_state = 0;
-                    vm_redraw(&vm_ctx);
+                    if (has_pending_load) {
+                        has_pending_load = 0;
+                        if (apply_save(&pending_load)) {
+                            sys_has_backup = 0;
+                            sys_message(SJ_LOADED);
+                        } else {
+                            sys_message(SJ_NODATA);
+                        }
+                    } else {
+                        vm_redraw(&vm_ctx);
+                    }
                 }
             }
         }

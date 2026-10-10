@@ -23,7 +23,7 @@ typedef struct {
     char     bg_name[VM_NAME_LEN];
     char     other_bg[VM_NAME_LEN];
     uint16_t bgm;                      /* BGM track playing when saved (0 = none) */
-    uint16_t reserved;
+    uint16_t disc;                     /* disc in the drive when saved (0 = unknown, old saves) */
     uint16_t vars[VM_NUM_VARS];        /* shared game flags */
 } save_data_t;
 
