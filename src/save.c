@@ -64,7 +64,10 @@ int save_read(int slot, save_data_t *d) {
         pkg.data_len >= (int)sizeof(*d) &&
         memcmp(pkg.data, SAVE_MAGIC, 4) == 0) {
         memcpy(d, pkg.data, sizeof(*d));
-        if (d->version == SAVE_VERSION) rc = SAVE_OK;
+        if (d->version >= SAVE_VERSION_MIN && d->version <= SAVE_VERSION) {
+            if (d->version < 3) d->disc = 0;   /* v2 had a zero reserved word here */
+            rc = SAVE_OK;
+        }
     }
     free(buf);
 #ifndef NDEBUG

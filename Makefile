@@ -10,7 +10,7 @@
 
 TARGET = eve_dc.elf
 SRC_OBJS = main.o src/renderer.o src/vm.o src/asset.o src/input.o src/video.o src/audio.o \
-           src/terminal.o src/bgm.o src/save.o src/adx/libadx.o src/adx/snddrv.o
+           src/terminal.o src/bgm.o src/save.o src/se.o src/adx/libadx.o src/adx/snddrv.o
 OBJS = $(SRC_OBJS) romdisk.o
 
 # DreamSDK exports KOS_BASE with backslashes; make wants forward slashes.

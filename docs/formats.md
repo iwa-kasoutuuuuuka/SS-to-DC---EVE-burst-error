@@ -172,4 +172,5 @@ base key. `tools/satbgm.py` renders the songs from this data.
 | `graphics/ui/SATFONT.BIN` (EVF1) | `"EVF1"`, u16 count, u16 0, count × u16 Shift-JIS code, count × 128-byte glyph |
 | `audio/DiscN/*.adx` | CRI ADX, mono, 22050 Hz |
 | `bgm/BGM<n>.wav` | RIFF, AICA (Yamaha) ADPCM, mono, 22050 Hz, looped as a whole |
+| `se/*.wav` | UI sounds from `MISC/*.WAV`: RIFF, AICA (Yamaha) ADPCM, mono, 22050 Hz |
 | `movies/*.mpg` | MPEG-1 program stream, 320x240, 30 fps, MP2 mono 32 kHz |

@@ -8,7 +8,8 @@
  * written as a standard VMU package so the BIOS file manager lists it. */
 #define SAVE_SLOTS   3
 #define SAVE_MAGIC   "EVSV"
-#define SAVE_VERSION 2   /* 2: + bgm track */
+#define SAVE_VERSION 3   /* 2: + bgm track, 3: + disc (same layout, reserved -> disc) */
+#define SAVE_VERSION_MIN 2
 
 typedef struct {
     char     magic[4];
@@ -23,7 +24,7 @@ typedef struct {
     char     bg_name[VM_NAME_LEN];
     char     other_bg[VM_NAME_LEN];
     uint16_t bgm;                      /* BGM track playing when saved (0 = none) */
-    uint16_t disc;                     /* disc in the drive when saved (0 = unknown, old saves) */
+    uint16_t disc;                     /* disc in the drive when saved (0 = single-disc build / v2) */
     uint16_t vars[VM_NUM_VARS];        /* shared game flags */
 } save_data_t;
 

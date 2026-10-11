@@ -107,6 +107,8 @@ make cdi                  # build/eve_dc.cdi（iso_root/ + iso_stage/audio/ を 
 make release              # clean → -DNDEBUG で全リビルド → CDI。シリアル出力はエラーのみ
 make EXTRA_CFLAGS="-DSTART_SCRIPT_NAME=B001"          # 任意の .SCO から起動（ロゴ／OP は飛ばす）
 make EXTRA_CFLAGS="-DDEMO_AUTO_ADVANCE=4 -DDEMO_RANDOM=7 -DDEMO_KEYS=120 -DDEMO_SWITCH=300"   # 無人テスト
+make cdi DISC=1 EXTRA_CFLAGS="-DDEMO_AUTO_ADVANCE=4 -DDEMO_SAVE_SLOT=3"   # 15 秒後にスロット 3 へセーブ（VMU にディスク番号付き v3 セーブを作る）
+make cdi DISC=2 EXTRA_CFLAGS="-DDEMO_AUTO_ADVANCE=4 -DDEMO_LOAD_SLOT=3"   # 15 秒後にスロット 3 をロード → 別ディスクのセーブなら「ディスク n に交換してください」(QA Q11)
 ```
 - `make` は DreamSDK の環境変数（DREAMSDK_HOME, KOS_BASE …）を持つシェルでしか通らない。python の subprocess から呼ぶと kos-cc の DreamSDK ヘルパーが環境を見つけられない（`auto_run.sh` がビルドを bash 側で行う理由）
 - 引用符入りの `-D` は kos-cc ラッパーが壊す。文字列は `-DSTART_SCRIPT_NAME=A001_6` のように識別子で渡し、C 側で文字列化する

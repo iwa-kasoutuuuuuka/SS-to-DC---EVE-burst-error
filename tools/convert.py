@@ -13,13 +13,14 @@ matter: the disc number is read from the image. Give all three game discs so
 that every picture and movie can be found; one Dreamcast disc is written per
 Saturn disc, with the same split of the story:
 
-  <out>/Disc<N>/scenario/Disc<N>/*.SCO     scenario files, copied as they are
+  <out>/Disc<N>/scenario/Disc<1..3>/*.SCO  scenario files, copied as they are
   <out>/Disc<N>/graphics/bg|spr/*.BIN      backgrounds / overlays used by that disc (EVB1)
   <out>/Disc<N>/graphics/misc/bg/*.BIN     terminal frames and other MISC pictures
   <out>/Disc<N>/graphics/ui/*.BIN          text font (SATFONT.BIN) and UI sprite sheets
   <out>/Disc<N>/graphics/ui_assets/SPR3.bmp  message window (drawn by this script)
   <out>/Disc<N>/movies/*.mpg               Cinepak movies re-encoded to MPEG-1
   <out>/Disc<N>/audio/Disc<N>/*.adx        voices and sound effects (CRI ADX)
+  <out>/Disc<N>/se/*.wav                   UI sounds (AICA ADPCM)
   <out>/Disc<N>/bgm/BGM<n>.wav             music rendered from the SCSP sequences (AICA ADPCM)
 
 Then `make cdi DISC=<N>` turns <out>/Disc<N> into a bootable image.
@@ -353,6 +354,28 @@ def voice_job(batch):
     return result
 
 
+def do_ui_sounds(game, number, out, force):
+    """MISC/*.WAV (cursor, confirm, cancel ...) -> se/<NAME>.wav, AICA ADPCM for snd_sfx."""
+    failed = []
+    for upper, real in sorted(game.index(number, "MISC").items()):
+        dst = out / "se" / (Path(upper).stem + ".wav")
+        if not upper.endswith(".WAV") or (dst.exists() and not force):
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        part = dst.with_name(dst.name + ".part")
+        try:
+            rate, pcm = satvoice.decode(game.discs[number].read(f"MISC/{real}"))
+        except (ValueError, IndexError, struct.error):
+            failed.append("se/" + dst.stem)
+            continue
+        if ffmpeg(["-f", "s16le", "-ar", str(rate), "-ac", "1", "-i", "-", "-ar", "22050",
+                   "-c:a", "adpcm_yamaha", "-f", "wav", str(part)], pcm.tobytes()):
+            os.replace(part, dst)
+        else:
+            failed.append("se/" + dst.stem)
+    return failed
+
+
 def do_voices(game, number, out, force, jobs):
     disc = game.discs[number]
     dst_dir = out / "audio" / f"Disc{number}"
@@ -421,10 +444,15 @@ def build_disc(game, number, out_root, skip, force, jobs, cache):
     log(f"== Disc {number} -> {out}")
 
     if "scenario" not in skip:
-        scripts = game.scripts(number)
-        for name, (data, _) in scripts.items():
-            write(out / "scenario" / f"Disc{number}" / name.upper(), data, force)
-        log(f"  scenario: {len(scripts)} files")
+        # The program keeps reading scenario/Disc<n> of the disc it was started
+        # from after a disc change, so every CD carries all three directories.
+        count = 0
+        for n in (1, 2, 3):
+            scripts = game.scripts(n if n in game.discs else number)
+            for name, (data, _) in scripts.items():
+                write(out / "scenario" / f"Disc{n}" / name.upper(), data, force)
+            count += len(scripts)
+        log(f"  scenario: {count} files")
     # Placeholder background shown before the first scene, and the disc marker.
     write(out / "S0005_LINEAR.BIN", bytes(512 * 256 * 2), force)
     write(out / f"DISC{number}.ID", f"EVE burst error disc {number}\n".encode(), force)
@@ -440,7 +468,7 @@ def build_disc(game, number, out_root, skip, force, jobs, cache):
         log(f"  movies: {done}")
     if "voices" not in skip:
         done, missing = do_voices(game, number, out, force, jobs)
-        problems += missing
+        problems += missing + do_ui_sounds(game, number, out, force)
         log(f"  voices: {done}")
     if "bgm" not in skip:
         done, missing = do_bgm(game, number, out, force, jobs, cache)

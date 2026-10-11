@@ -64,7 +64,7 @@ static FILE *adx_in;
 static volatile int adx_gen = 0;
 #define ADX_ALIVE (snddrv.dec_status != SNDDEC_STATUS_DONE && my_gen == adx_gen)
 static int pcm_samples, loop;
-static unsigned char adx_buf[ADX_HDR_SIZE_V4];
+/* adx_buf removed (EVE-DC): the header is parsed into a local buffer and each decoder thread has its own chunk buffer */
 
 /* Local function definitions */
 static int adx_parse( unsigned char *buf );
@@ -99,7 +99,8 @@ int adx_dec( const char * adx_file, int loop_enable )
         return 0;
     }
     
-    if(adx_parse( adx_buf ) < 1) /* Make sure we are working with an ADX file */
+    unsigned char hdr[ADX_HDR_SIZE_V4];
+    if(adx_parse( hdr ) < 1) /* Make sure we are working with an ADX file */
     {
         printf("LibADX: Invalid File Header\n");
         fclose( adx_in );
@@ -169,29 +170,21 @@ int adx_stop()
     if( snddrv.dec_status != SNDDEC_STATUS_STREAMING )
         return 0;
 
-    printf("LibADX: Stopping t=%lu\n", (unsigned long)timer_ms_gettime64());    
-    loop=0;     
-    snddrv.dec_status = SNDDEC_STATUS_DONE;
-    /* EVE-DC: release a driver callback that is spinning for HAVEBUF and never
-     * wait forever (the original deadlocked after long CD reads). */
-    snddrv.buf_status = SNDDRV_STATUS_BUFEND;
-    { int guard = 0;
-      /* 1.5 s is plenty with the read-ahead buffer; a thread that is still
-       * stuck in a CD read is abandoned safely thanks to adx_gen. */
-      while( snddrv.dec_status != SNDDEC_STATUS_NULL && guard++ < 150 ) {
-          thd_sleep(10);
 #ifndef NDEBUG
-          if (guard == 75) printf("LibADX: still waiting: dec=%d buf=%d drv=%d\n", snddrv.dec_status, snddrv.buf_status, snddrv.drv_status);
+    printf("LibADX: Stopping t=%lu\n", (unsigned long)timer_ms_gettime64());
 #endif
-      }
-      if( snddrv.dec_status != SNDDEC_STATUS_NULL ) {
-          printf("LibADX: decoder thread did not exit, forcing driver shutdown\n");
-          adx_gen++;                 /* the stuck thread will exit on its own */
-          snddrv_exit();
-          snddrv.dec_status = SNDDEC_STATUS_NULL;
-      }
-    }
-         
+    loop=0;
+    snddrv.dec_status = SNDDEC_STATUS_DONE;
+    snddrv.buf_status = SNDDRV_STATUS_BUFEND;
+    /* EVE-DC: do not wait for the decoder thread. It owns private copies of the
+     * header, chunk buffer, PCM buffer and read-ahead buffer, and leaves its loops
+     * as soon as it notices the generation change (even if it is currently stuck
+     * in a slow CD read); it then frees everything itself and, seeing it was
+     * superseded, does not touch the driver. Waiting here blocked the main
+     * thread for up to 1.5 s every time the player skipped a line. */
+    adx_gen++;
+    snddrv_exit();                    /* stops the AICA driver thread: one poll (~20 ms) */
+    snddrv.dec_status = SNDDEC_STATUS_NULL;
     return 1;
 }
 
@@ -330,14 +323,16 @@ static void* adx_thread(void* __attribute__((unused)) arg)
     unsigned char *pcm_buf=NULL;
     const int my_gen = adx_gen;
     FILE *my_in = adx_in;
+    ADX_INFO info = ADX_Info;              /* EVE-DC: private copy; a superseded thread must not see the next file's header */
+    unsigned char chunkbuf[ADX_HDR_SIZE_V4]; /* EVE-DC: private chunk buffer (chunkbuf is reused by adx_parse on the main thread) */
     adx_rd_t rd = { NULL, 0, 0, 0 };
     short outbuf[32*2];
     PREV prev[2];
     //ADX_INFO ADX_Info;
     int pcm_size=0,wsize;
         
-    printf("LibADX: %ikHz, %i channel\n", ADX_Info.rate, ADX_Info.channels);
-    if( ADX_Info.loop && loop )             
+    printf("LibADX: %ikHz, %i channel\n", info.rate, info.channels);
+    if( info.loop && loop )             
         printf("LibADX: Loop Enabled\n");
 
     pcm_buf = malloc(PCM_BUF_SIZE);                    /* allocate PCM buffer */
@@ -347,7 +342,7 @@ static void* adx_thread(void* __attribute__((unused)) arg)
     if( rd.buf == NULL ) { free(pcm_buf); goto exit; }
     rd.fpos = ftell(my_in);
 
-    snddrv_start( ADX_Info.rate, ADX_Info.channels );/*Start AICA audio driver*/ 
+    snddrv_start( info.rate, info.channels );/*Start AICA audio driver*/ 
     snddrv.dec_status = SNDDEC_STATUS_STREAMING;
 
     prev[0].s1 = 0;
@@ -356,8 +351,8 @@ static void* adx_thread(void* __attribute__((unused)) arg)
     prev[1].s2 = 0;
 
 adx_dec:
-    pcm_samples = ADX_Info.samples;    
-    if (ADX_Info.channels==1)                          /* MONO Decode Routine */
+    pcm_samples = info.samples;    
+    if (info.channels==1)                          /* MONO Decode Routine */
     while(pcm_samples && ADX_ALIVE) {
 
         /* Check for request to pause stream */
@@ -369,8 +364,8 @@ adx_dec:
         }  
 
         /* If looping is enabled, check for loop point */ 
-        if( loop && ADX_Info.loop )
-            if( rd.fpos >= ADX_Info.loop_end  )
+        if( loop && info.loop )
+            if( rd.fpos >= info.loop_end  )
                    goto dec_finished;                   
         
         /* If there is room in PCM buffer, decode next chunk of ADX samples */        
@@ -378,14 +373,14 @@ adx_dec:
         {
             /* Read the current chunk */
             { uint64_t t0 = timer_ms_gettime64();
-              adx_read(my_in, &rd, adx_buf, ADX_Info.chunk_size);
+              adx_read(my_in, &rd, chunkbuf, info.chunk_size);
               uint64_t dt = timer_ms_gettime64() - t0; (void)dt;
 #ifndef NDEBUG
               if (dt > 200) printf("LibADX: slow fread %lu ms\n", (unsigned long)dt);
 #endif
             }
             /* Convert ADX chunk to PCM */
-            adx_to_pcm(outbuf,adx_buf,prev);
+            adx_to_pcm(outbuf,chunkbuf,prev);
             if (pcm_samples>32) wsize=32; else wsize = pcm_samples;
             pcm_samples-=wsize;
             /* Copy the deocded samples to sample buffer */
@@ -396,7 +391,7 @@ adx_dec:
         if( adx_push(pcm_buf, &pcm_size) == 0 && pcm_size >= PCM_BUF_SIZE - 16384*2 )
             thd_sleep(1);                    /* both buffers full: let the AICA drain */
     }
-    else if (ADX_Info.channels==2)                   /* STEREO Decode Routine */
+    else if (info.channels==2)                   /* STEREO Decode Routine */
     while(pcm_samples && ADX_ALIVE) {
         
         /* Check for request to pause stream */
@@ -408,8 +403,8 @@ adx_dec:
         }    
                             
         /* If looping is enabled, check for loop point */   
-        if( loop && ADX_Info.loop )
-            if( rd.fpos >= ADX_Info.loop_end  )
+        if( loop && info.loop )
+            if( rd.fpos >= info.loop_end  )
                    goto dec_finished;
 
         /* If there is room in the PCM buffer, decode some ADX samples */        
@@ -418,9 +413,9 @@ adx_dec:
             short tmpbuf[32*2];
             int i;
 
-            adx_read(my_in, &rd, adx_buf, ADX_Info.chunk_size*2);
-            adx_to_pcm(tmpbuf,adx_buf,prev);
-            adx_to_pcm(tmpbuf+32,adx_buf+ADX_Info.chunk_size,prev+1);
+            adx_read(my_in, &rd, chunkbuf, info.chunk_size*2);
+            adx_to_pcm(tmpbuf,chunkbuf,prev);
+            adx_to_pcm(tmpbuf+32,chunkbuf+info.chunk_size,prev+1);
             for(i=0;i<32;i++) {
                 outbuf[i*2]   = tmpbuf[i];
                 outbuf[i*2+1] = tmpbuf[i+32];
@@ -444,13 +439,13 @@ dec_finished:         /* Indicated samples finished or loop point reached */
      * (not after a stop: the original looped forever on adx_stop() of a looping file) */
     if( loop && ADX_ALIVE )
     {
-        if( ADX_Info.loop )
+        if( info.loop )
         {
-            adx_seek( my_in, &rd, ADX_Info.loop_start );
-            ADX_Info.samples = ADX_Info.loop_samples;
+            adx_seek( my_in, &rd, info.loop_start );
+            info.samples = info.loop_samples;
         }
         else
-            adx_seek( my_in, &rd, ADX_Info.sample_offset+ADX_CRI_SIZE );
+            adx_seek( my_in, &rd, info.sample_offset+ADX_CRI_SIZE );
         goto adx_dec;
     }
 

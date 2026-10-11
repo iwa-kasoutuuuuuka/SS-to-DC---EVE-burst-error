@@ -10,6 +10,12 @@
 #include "audio.h"
 #include "terminal.h"
 #include "bgm.h"
+#include "se.h"
+#ifdef NO_SE   /* isolation switch: build without the UI sound effects */
+#define se_init()      ((void)0)
+#define se_shutdown()  ((void)0)
+#define se_play(name)  ((void)(name))
+#endif
 #include "save.h"
 
 /* Build-time switches (pass via EXTRA_CFLAGS, e.g. make EXTRA_CFLAGS=-DDEMO_AUTO_ADVANCE=1)
@@ -29,6 +35,9 @@
  *   DEMO_KEYS         : N>0 injects Start / X / Y in turn every N frames (system menu,
  *                       backlog and auto toggle get exercised by unattended tests).
  *   NO_INTRO          : skip the logo and opening movies at boot.
+ *   DEMO_SAVE_SLOT    : n>0 writes a save to slot n 15 s after the script starts.
+ *   DEMO_LOAD_SLOT    : n>0 loads slot n 15 s after the script starts (QA Q11: a save
+ *                       from another disc must raise the disc prompt on a MULTI_DISC build).
  *
  * Controls: A advance / confirm, B cancel (system menus) or hold to
  * fast-forward dialogue, Start system menu, X backlog, Y auto mode on/off,
@@ -49,6 +58,12 @@
 #endif
 #ifndef DEMO_KEYS
 #define DEMO_KEYS 0
+#endif
+#ifndef DEMO_SAVE_SLOT
+#define DEMO_SAVE_SLOT 0
+#endif
+#ifndef DEMO_LOAD_SLOT
+#define DEMO_LOAD_SLOT 0
 #endif
 #ifndef DEMO_EXPLORE
 #define DEMO_EXPLORE 0
@@ -71,9 +86,8 @@
 #endif
 #define EVE_STR_(x) #x
 #define EVE_STR(x)  EVE_STR_(x)
-/* Scenario files live on the CD (scenario/DiscN/, all 90 per disc, written by
- * tools/convert.py). The romdisk is an optional fallback: a .SCO placed in
- * romdisk/ is used when the CD does not have it. */
+/* Scenario files live on the CD (scenario/DiscN/, written by tools/convert.py).
+ * A .SCO placed in romdisk/ is used when the CD does not have it. */
 #define SCENARIO_DIR "/cd/scenario/Disc" EVE_STR(EVE_DISC)
 
 /* Global pointers for VM callbacks */
@@ -151,6 +165,15 @@ static void upper_name(const char *src, char *dst, int cap);
 /* OP_MOVIE: /cd/movies/<NAME>.mpg (ffmpeg conversion of MOVIES/<name>.CPK).
  * Blocking; A/Start skips. Names like "m1718m" that have no file fall back to
  * the name without the trailing letter. */
+/* libmpeg resets the sound driver: drop the UI samples before a movie and reload
+ * them afterwards (video.c re-initialises the driver itself). */
+static int movie_play(const char *path) {
+    se_shutdown();
+    int r = video_play(path);
+    se_init();
+    return r;
+}
+
 void vm_on_movie(const char *name) {
 #ifdef NO_VIDEO
     printf("Video: skipped %s (NO_VIDEO)\n", name);
@@ -161,12 +184,12 @@ void vm_on_movie(const char *name) {
     snprintf(path, sizeof(path), "/cd/movies/%s.mpg", upper);
     audio_stop_voice();
     bgm_stop();   /* libmpeg owns the sound hardware while the movie plays */
-    if (video_play(path) < 0) {
+    if (movie_play(path) < 0) {
         size_t n = strlen(upper);
         if (n > 1 && upper[n - 1] >= 'A' && upper[n - 1] <= 'Z') {
             upper[n - 1] = '\0';
             snprintf(path, sizeof(path), "/cd/movies/%s.mpg", upper);
-            video_play(path);
+            movie_play(path);
         }
     }
     fade_level = 0; fade_target = 0;   /* the movie replaced the faded-out scene */
@@ -193,19 +216,18 @@ void vm_on_bgm(int opcode, int value) {
     printf("BGM: op %02x value %d\n", opcode, value);
 #endif
     if (opcode == OP_POSTWAIT) {
-        static int jingle = 0;
         if (value <= 0) {
             bgm_stop();
-        } else if (value == jingle && audio_voice_playing()) {
-            /* the script repeats the instruction while the jingle is still on */
-        } else if (bgm_play(value)) {
-            jingle = 0;
-        } else {
-            /* No sequence with this number (52): the Saturn disc has it as a
-             * recorded clip SOUND/EVE_<n>.WAV, played once like a sound effect. */
-            char token[16];
-            snprintf(token, sizeof(token), "eve_%d", value);
-            if (audio_play_voice(token)) jingle = value;
+        } else if (!bgm_play(value)) {
+            /* No BGM<n>.wav: numbers 50..62 are jingles the Saturn ships as SOUND/EVE_<n>.WAV
+             * (the Windows build turns "8026 52" into the sound effect eve_52). Play it once
+             * on the voice channel; a repeated cue while it is still playing is ignored. */
+            static int jingle = 0;
+            if (!(jingle == value && audio_voice_playing())) {
+                char tok[16];
+                snprintf(tok, sizeof(tok), "eve_%d", value);
+                if (audio_play_voice(tok)) jingle = value;
+            }
         }
     } else if (opcode == OP_BGM_B) {
         bgm_fade_out(value * 15);
@@ -323,8 +345,7 @@ static void upper_name(const char *src, char *dst, int cap) {
  * path_out receives the path that was actually opened (for logging). */
 static uint8_t *load_scenario_by_name(const char *name_upper, uint32_t *size_out,
                                       char *path_out, size_t cap) {
-    /* Each disc carries its own scenario/Disc<n>: follow the disc in the drive. */
-    snprintf(path_out, cap, "/cd/scenario/Disc%d/%s.SCO", cur_disc, name_upper);
+    snprintf(path_out, cap, SCENARIO_DIR "/%s.SCO", name_upper);
     uint8_t *data = asset_load_scenario(path_out, size_out);
     if (!data) {
         snprintf(path_out, cap, "/rd/%s.SCO", name_upper);
@@ -395,9 +416,19 @@ static void collect_save(save_data_t *d) {
     memcpy(d->bg_name, vm_ctx.bg_name, VM_NAME_LEN);
     memcpy(d->other_bg, other_ctx.bg_name, VM_NAME_LEN);
     d->bgm = (uint16_t)bgm_current();
-    d->disc = (uint16_t)cur_disc;
+#ifdef MULTI_DISC
+    d->disc = (uint16_t)cur_disc;      /* QA Q11: the load must ask for this disc */
+#else
+    d->disc = 0;
+#endif
     memcpy(d->vars, vm_ctx.vars, sizeof(d->vars));
 }
+
+/* Disc the loaded save needs but which is not in the drive (0 = none). */
+static int load_disc_req = 0;
+#ifdef MULTI_DISC
+static void request_disc(int n);   /* defined with the multi-disc code below */
+#endif
 
 static int apply_save(const save_data_t *d) {
     char path[64];
@@ -431,9 +462,16 @@ static int apply_save(const save_data_t *d) {
             other_started = 1;
         }
     }
-    if (vm_ctx.bg_name[0]) vm_on_background(vm_ctx.bg_name);
+    load_disc_req = 0;
+#ifdef MULTI_DISC
+    /* QA Q11: a save made on another disc resumes in a scene whose graphics and
+     * voices are not on this image. Ask for that disc first (like 803a); the
+     * background is reloaded once the disc is detected. */
+    if (d->disc >= 1 && d->disc <= 3 && d->disc != cur_disc) load_disc_req = d->disc;
+#endif
+    if (vm_ctx.bg_name[0] && !load_disc_req) vm_on_background(vm_ctx.bg_name);
     if (d->bgm) bgm_play(d->bgm); else bgm_stop();   /* QA Q3: restore the music */
-    printf("LOAD: %s ip=%lu route=%d bgm=%d\n", cur_script, (unsigned long)vm_ctx.ip, vm_ctx.route, d->bgm);
+    printf("LOAD: %s ip=%lu route=%d bgm=%d disc=%d\n", cur_script, (unsigned long)vm_ctx.ip, vm_ctx.route, d->bgm, d->disc);
     return 1;
 }
 
@@ -478,12 +516,6 @@ static void sys_message(const char *msg) {
     sys_menu = SYS_MSG;
 }
 
-#ifdef MULTI_DISC
-static void request_disc(int n);         /* defined below */
-static save_data_t pending_load;         /* save waiting for its disc */
-static int  has_pending_load = 0;
-#endif
-
 static void handle_slot_choice(void) {
     int kind = sys_menu, slot = vm_ctx.select_idx;
     if (slot >= SAVE_SLOTS) {                             /* キャンセル */
@@ -506,25 +538,24 @@ static void handle_slot_choice(void) {
     } else {
         static save_data_t d;
         int rc = save_read(slot, &d);
-#ifdef MULTI_DISC
-        if (rc == SAVE_OK && d.disc >= 1 && d.disc <= 3 && d.disc != cur_disc) {
-            /* The save was made on another disc: its pictures and voices are
-             * not on this one. Ask for that disc first, then load. */
-            memcpy(&pending_load, &d, sizeof(d));
-            has_pending_load = 1;
-            sys_menu = 0;
-            vm_ctx.is_choosing = 0;
-            request_disc(d.disc);
-            return;
-        }
-#endif
         if (rc == SAVE_OK && apply_save(&d)) {
             sys_has_backup = 0;                           /* the old state is gone */
+#ifdef MULTI_DISC
+            if (load_disc_req) {
+                /* Skip the LOADED message: the disc prompt replaces it. */
+                sys_menu = 0;
+                se_play("SET");
+                request_disc(load_disc_req);
+                load_disc_req = 0;
+                return;
+            }
+#endif
             msg = SJ_LOADED;
         } else {
             msg = (rc == SAVE_NO_VMU) ? SJ_NOVMU : SJ_NODATA;
         }
     }
+    se_play((strcmp(msg, SJ_SAVED) == 0 || strcmp(msg, SJ_LOADED) == 0) ? "SET" : "ERROR");
     sys_message(msg);
 }
 
@@ -786,6 +817,7 @@ static void start_title(void) {
     asset_free_evb1(&scene_bg);
     asset_free_evb1(&scene_spr);
     update_text_texture((const uint8_t *)"");
+    se_play("TITLE");
 }
 
 /* OP_BG: /cd/graphics/bg/<NAME>.BIN (converted by convert_images.py). A new
@@ -897,19 +929,6 @@ int main(int argc, char **argv) {
         printf("CD-ROM check timed out!\n");
     }
 #endif
-#ifdef MULTI_DISC
-    /* The program on every disc is the same apart from EVE_DISC; trust the
-     * marker of the disc that is actually in the drive. */
-    if (!disc_present(cur_disc)) {
-        for (int n = 1; n <= 3; n++) {
-            if (disc_present(n)) {
-                cur_disc = n;
-                audio_init(cur_disc);
-                break;
-            }
-        }
-    }
-#endif
 
 #if !defined(NO_INTRO) && !defined(NO_VIDEO) && !DEMO_AUTO_ADVANCE && !defined(START_SCRIPT_NAME_GIVEN)
     /* Boot sequence: C's ware logo, then the opening movie.
@@ -918,14 +937,24 @@ int main(int argc, char **argv) {
     video_play("/cd/movies/OPENING.mpg");
 #endif
     /* Load Assets */
-    /* BIOS font (half-width and fallback), then the Saturn typeface made by
-     * tools/convert.py. The file name argument of asset_load_font is unused. */
-    if (asset_load_font(NULL) == 0) {
-        asset_load_satfont("/cd/graphics/ui/SATFONT.BIN");
+#ifndef NDEBUG
+    printf("Loading font: /cd/FONT.bin\n");
+#endif
+    if (asset_load_font("/cd/FONT.bin") < 0) {
+#ifndef NDEBUG
+        printf("FAILED TO LOAD FONT /cd/FONT.bin\n");
+#endif
     }
+#ifndef NDEBUG
+    else {
+        printf("Font loaded successfully.\n");
+    }
+#endif
+    asset_load_satfont("/cd/graphics/ui/SATFONT.BIN");   /* original Saturn typeface (optional); kept outside the NDEBUG-only branch */
     font_vram = render_alloc_txr(512 * 256 * 2);
     terminal_init();
     bgm_init();
+    se_init();      /* UI sound effects (src/se.c), needs the sound driver up */
     
 #ifndef NDEBUG
     printf("Loading msgbox: /cd/graphics/ui_assets/SPR3.bmp\n");
@@ -975,7 +1004,7 @@ int main(int argc, char **argv) {
 #endif
 #endif
 #ifdef START_IP
-        vm_ctx.ip = START_IP;       /* test entry: byte ip as printed by tools/sco.py */
+        vm_ctx.ip = START_IP;   /* test hook: byte ip inside START_SCRIPT_NAME (e.g. -DSTART_IP=8418 for the A001_2 jingle) */
 #endif
         update_text_texture((const uint8_t *)"SCENARIO LOADED: " EVE_STR(START_SCRIPT_NAME) ".SCO");
     }
@@ -1052,11 +1081,33 @@ int main(int argc, char **argv) {
                 demo_key_timer = 0;
             }
 #endif
+#if DEMO_SAVE_SLOT || DEMO_LOAD_SLOT
+            {
+                static int demo_sl_timer = 0;
+                if (demo_sl_timer >= 0 && ++demo_sl_timer >= 900 && sys_menu == 0) {
+                    static save_data_t d;
+                    demo_sl_timer = -1;                     /* once */
+#if DEMO_SAVE_SLOT
+                    collect_save(&d);
+                    int rc = save_write(DEMO_SAVE_SLOT - 1, &d);
+                    printf("DEMO: save slot %d script=%s disc=%d rc=%d\n", DEMO_SAVE_SLOT, d.cur_script, d.disc, rc);
+#else
+                    int rc = save_read(DEMO_LOAD_SLOT - 1, &d);
+                    printf("DEMO: load slot %d rc=%d script=%s disc=%d\n", DEMO_LOAD_SLOT, rc, d.cur_script, d.disc);
+                    if (rc == SAVE_OK && apply_save(&d)) {
+#ifdef MULTI_DISC
+                        if (load_disc_req) { request_disc(load_disc_req); load_disc_req = 0; }
+#endif
+                    }
+#endif
+                }
+            }
+#endif
             /* System menu / backlog / auto */
             if (sys_menu == SYS_BACKLOG) {
-                if (pressed & CONT_DPAD_UP)   { backlog_page++; show_backlog(); }
-                if (pressed & CONT_DPAD_DOWN) { backlog_page--; show_backlog(); }
-                if (pressed & (CONT_X | CONT_B | CONT_A)) sys_restore();
+                if (pressed & CONT_DPAD_UP)   { backlog_page++; show_backlog(); se_play("SCROLL"); }
+                if (pressed & CONT_DPAD_DOWN) { backlog_page--; show_backlog(); se_play("SCROLL"); }
+                if (pressed & (CONT_X | CONT_B | CONT_A)) { sys_restore(); se_play("CANCEL"); }
                 pressed = 0;                              /* nothing reaches the script */
             } else if (sys_menu == SYS_MSG) {
                 if (pressed & (CONT_A | CONT_B)) {
@@ -1067,13 +1118,15 @@ int main(int argc, char **argv) {
             } else if (sys_menu == SYS_MAIN || sys_menu == VM_SAVE || sys_menu == VM_LOAD) {
                 if (pressed & CONT_B) {                   /* B = cancel */
                     if (sys_has_backup) sys_restore(); else { sys_menu = 0; vm_ctx.is_choosing = 0; }
+                    se_play("CANCEL");
                     pressed = 0;
                 }
             } else {
-                if (pressed & CONT_START) { open_system_menu(); pressed = 0; }
-                else if (pressed & CONT_X) { open_backlog(); pressed = 0; }
+                if (pressed & CONT_START) { open_system_menu(); if (sys_menu) se_play("OPEN"); pressed = 0; }
+                else if (pressed & CONT_X) { open_backlog(); if (sys_menu) se_play("OPEN"); pressed = 0; }
                 else if (pressed & CONT_Y) {
                     auto_mode = !auto_mode;
+                    se_play("SET");
 #ifndef NDEBUG
                     printf("SYS: auto %d\n", auto_mode);
 #endif
@@ -1093,6 +1146,10 @@ int main(int argc, char **argv) {
                 }
             }
 
+            if (vm_ctx.is_choosing) {
+                if (pressed & (CONT_DPAD_UP | CONT_DPAD_DOWN)) se_play("MOVE");
+                if (pressed & CONT_A) se_play("SET");
+            }
             vm_handle_input(&vm_ctx, pressed);
             if (sys_menu == SYS_MAIN && !vm_is_choosing(&vm_ctx)) handle_system_choice();
             else if ((sys_menu == VM_SAVE || sys_menu == VM_LOAD) && !vm_is_choosing(&vm_ctx)) handle_slot_choice();
@@ -1142,15 +1199,35 @@ int main(int argc, char **argv) {
                                     "\x82\x60\x83\x7b\x83\x5e\x83\x93\x82\xc5\x83\x5e\x83\x43\x83\x67\x83\x8b\x82\xd6");
             }
         } else if (game_state == 1) {
+#if DEMO_SWEEP
+            /* Smoke test: a script that ends (B032 ...) must not stop the sweep.
+             * After the last script stay on this screen (no "done" spam). */
+            if (sweep_idx + 1 < sweep_count) {
+                printf("SWEEP: %s ended, next\n", cur_script);
+                game_state = 0;
+                sweep_timer = 0;
+                sweep_next();
+            }
+#else
             if (pressed & CONT_A) {
                 start_title();
                 game_state = 0;
             }
+#endif
         }
 #ifdef MULTI_DISC
         else if (game_state == 2) {
             /* Poll the drive once a second until the requested disc is in. */
             static int disc_timer = 0;
+#if DEMO_SWEEP
+            /* Smoke test: a disc prompt (A01 803a 1/2, A001_4 / B022_2 803a 3) would
+             * block the sweep forever; log it and continue with the next script. */
+            printf("SWEEP: disc %d requested, skipping\n", want_disc);
+            game_state = 0;
+            sweep_timer = 0;
+            sweep_next();
+            disc_timer = 0;
+#endif
             if (++disc_timer >= 60) {
                 disc_timer = 0;
                 cdrom_reinit();
@@ -1159,17 +1236,10 @@ int main(int argc, char **argv) {
                     audio_init(cur_disc);
                     printf("DISC: disc %d detected\n", cur_disc);
                     game_state = 0;
-                    if (has_pending_load) {
-                        has_pending_load = 0;
-                        if (apply_save(&pending_load)) {
-                            sys_has_backup = 0;
-                            sys_message(SJ_LOADED);
-                        } else {
-                            sys_message(SJ_NODATA);
-                        }
-                    } else {
-                        vm_redraw(&vm_ctx);
-                    }
+                    /* Reload the scene background from the new image (needed after a
+                     * cross-disc load, harmless after 803a). */
+                    if (vm_ctx.bg_name[0]) vm_on_background(vm_ctx.bg_name);
+                    vm_redraw(&vm_ctx);
                 }
             }
         }
